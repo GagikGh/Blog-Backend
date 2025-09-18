@@ -1,6 +1,4 @@
 import db from "../../database/db.js";
-import dotenv from 'dotenv';
-dotenv.config();
 
 export const getPosts = async (req, res) => {
     const { search, page = "1", limit = "4" } = req.query;
@@ -33,51 +31,47 @@ export const getPosts = async (req, res) => {
 
 export const getPostById = async (req, res) => {
     const { id } = req.params;
+
     const [rows] = await db.query(
-        `SELECT
-             posts.*,
-             users.first_name AS firstname,
-             users.last_name AS lastname,
-             GROUP_CONCAT(CONCAT(tags.id, ':', tags.name, ':', tags.color) SEPARATOR '|') AS tags
+        `SELECT posts.*, users.first_name AS firstname, users.last_name AS lastname
          FROM posts
                   JOIN users ON posts.user_id = users.id
-                  LEFT JOIN post_tags ON posts.id = post_tags.post_id
-                  LEFT JOIN tags ON post_tags.tag_id = tags.id
-         WHERE posts.id = ?
-         GROUP BY posts.id;`,
+         WHERE posts.id = ?`,
+        [id]
+    );
+    const postRow = rows[0];
+
+    const [tagsRows] = await db.query(
+        `SELECT tags.id, tags.name, tags.color
+     FROM tags
+     JOIN post_tags ON tags.id = post_tags.tag_id
+     WHERE post_tags.post_id = ?`,
         [id]
     );
 
-    if (!rows.length) return res.status(404).json({ error: "Post not found" });
+    const [commentsRows] = await db.query(
+        `SELECT comments.id, comments.text, comments.created_at, users.first_name AS firstname, users.last_name AS lastname, comments.user_id
+     FROM comments
+     JOIN users ON comments.user_id = users.id
+     WHERE comments.post_id = ?
+     ORDER BY comments.created_at DESC`,
+        [id]
+    );
 
-    const row = rows[0];
-
-    const tags = row.tags ? row.tags.split('|').map(tagStr => {
-            const [id, name, color] = tagStr.split(':');
-            return { id: Number(id), name, color };
-        }) : [];
-
-    const post = {
-        id: row.id,
-        user_id: row.user_id,
-        title: row.title,
-        description: row.description,
-        created_at: row.created_at,
-        firstname: row.firstname,
-        lastname: row.lastname,
-        tags
-    };
-
-    res.json(post);
+    res.json({
+        ...postRow,
+        tags: tagsRows,
+        comments: commentsRows
+    });
 };
-
 
 export const addPost = async (req, res) => {
     const createdAt = Math.floor(Date.now() / 1000);
     const { title, description } = req.body;
+    const userId = req.user.id;
 
     await db.query("INSERT INTO posts (user_id, title, description, created_at) " +
-        "VALUES (?, ?, ?, ?);", [ parseInt(process.env.outUserId), title, description, createdAt]);
+        "VALUES (?, ?, ?, ?);", [ parseInt(userId), title, description, createdAt]);
 
     res.json({ title, description, createdAt });
 };
@@ -118,4 +112,43 @@ export const getPostsByTag = async (req, res) => {
     }
 
     res.json(postsByTag);
+};
+
+export const addComment = async (req, res) => {
+    const createdAt = Math.floor(Date.now() / 1000);
+    const { id } = req.params;
+    const { text } = req.body;
+    const userId = req.user.id;
+
+    await db.query(
+        "INSERT INTO comments (user_id, post_id, text, created_at) VALUES (?, ?, ?, ?)",
+        [userId, id, text, createdAt]
+    );
+
+    const [author] = await db.query("SELECT first_name FROM users WHERE id = ?;", [userId]);
+
+    res.json({
+        success: true,
+        comment: {
+            firstname: author,
+            user_id: userId,
+            text,
+            created_at: createdAt
+        }
+    });
+};
+
+export const getComments = async (req, res) => {
+    const { id } = req.params;
+
+    const [rows] = await db.query(
+        `SELECT comments.id, comments.text, comments.created_at, users.first_name AS firstname, comments.user_id
+         FROM comments
+         JOIN users ON comments.user_id = users.id
+         WHERE comments.post_id = ?
+         ORDER BY comments.created_at DESC`,
+        [id]
+    );
+
+    res.json(rows);
 };

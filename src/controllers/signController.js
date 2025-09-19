@@ -20,7 +20,7 @@ export const login = async (req, res) => {
         { expiresIn: "1h" }
     );
 
-    res.json({ token });
+    res.json({ token, user });
 };
 
 export const register = async (req, res) => {
@@ -42,7 +42,7 @@ export const register = async (req, res) => {
             { expiresIn: "24h" }
         );
 
-        res.json({ token });
+        res.json({ token, user });
     } catch (err) {
         console.error(err);
 

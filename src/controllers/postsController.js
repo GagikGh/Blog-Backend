@@ -50,18 +50,34 @@ export const getPostById = async (req, res) => {
     );
 
     const [commentsRows] = await db.query(
-        `SELECT comments.id, comments.text, comments.created_at, users.first_name AS firstname, users.last_name AS lastname, comments.user_id
-     FROM comments
-     JOIN users ON comments.user_id = users.id
-     WHERE comments.post_id = ?
-     ORDER BY comments.created_at DESC`,
+        `SELECT
+             c.id,
+             c.text,
+             c.created_at,
+             u.first_name AS firstname,
+             u.last_name AS lastname,
+             c.user_id,
+             GROUP_CONCAT(l.user_id) AS likes
+         FROM comments c
+                  LEFT JOIN likes l ON l.comment_id = c.id
+                  JOIN users u ON c.user_id = u.id
+         WHERE c.post_id = ?
+         GROUP BY c.id
+         ORDER BY c.created_at DESC;
+        `,
         [id]
     );
+
+    commentsRows.forEach(comment => {
+        comment.likes = comment.likes
+            ? comment.likes.split(',').map(id => Number(id))
+            : [];
+    });
 
     res.json({
         ...postRow,
         tags: tagsRows,
-        comments: commentsRows
+        comments: commentsRows,
     });
 };
 
@@ -141,14 +157,100 @@ export const addComment = async (req, res) => {
 export const getComments = async (req, res) => {
     const { id } = req.params;
 
-    const [rows] = await db.query(
-        `SELECT comments.id, comments.text, comments.created_at, users.first_name AS firstname, comments.user_id
-         FROM comments
-         JOIN users ON comments.user_id = users.id
-         WHERE comments.post_id = ?
-         ORDER BY comments.created_at DESC`,
+    const [commentsRows] = await db.query(
+        `SELECT
+             c.id,
+             c.text,
+             c.created_at,
+             u.first_name AS firstname,
+             u.last_name AS lastname,
+             c.user_id,
+             GROUP_CONCAT(l.user_id) AS likes
+         FROM comments c
+                  LEFT JOIN likes l ON l.comment_id = c.id
+                  JOIN users u ON c.user_id = u.id
+         WHERE c.post_id = ?
+         GROUP BY c.id
+         ORDER BY c.created_at DESC;
+        `,
         [id]
     );
 
-    res.json(rows);
+    commentsRows.forEach(comment => {
+        comment.likes = comment.likes
+            ? comment.likes.split(',').map(id => Number(id))
+            : [];
+    });
+
+    res.json([...commentsRows]);
+};
+
+export const toggleLike = async (req, res) => {
+    const { commentId } = req.params;
+    const userId = req.user.id;
+
+    const [like] = await db.query(
+        "SELECT * FROM likes WHERE user_id = ? AND comment_id = ?;",
+        [userId, commentId]
+    );
+
+    if (like.length) {
+        await db.query("DELETE FROM likes WHERE id = ?", [like[0].id]);
+        return res.json({ unliked: true, likeId: like[0].id });
+    }
+
+    const [result] = await db.query(
+        "INSERT INTO likes (user_id, comment_id) VALUES (?, ?)",
+        [userId, commentId]
+    );
+
+    const likeId = result.insertId;
+    const [newLike] = await db.query("SELECT * FROM likes WHERE id = ?", [likeId]);
+
+    return res.json({ liked: true, data: newLike[0] });
+};
+
+export const toggleFollowing = async (req, res) => {
+    try {
+        const { id: postId } = req.params;  // id of the post
+        const userId = req.user.id;         // current logged-in user
+
+        // Get the post's author
+        const [postRows] = await db.query(
+            "SELECT user_id FROM posts WHERE id = ?",
+            [postId]
+        );
+
+        if (postRows.length === 0) {
+            return res.status(404).json({ error: "Post not found" });
+        }
+
+        const followedId = postRows[0].user_id;
+
+        // Check if already following this author
+        const [followRows] = await db.query(
+            "SELECT * FROM follow WHERE follower_id = ? AND followed_id = ?",
+            [userId, followedId]
+        );
+
+        if (followRows.length > 0) {
+            // Already following → unfollow
+            await db.query(
+                "DELETE FROM follow WHERE follower_id = ? AND followed_id = ?",
+                [userId, followedId]
+            );
+            return res.json({ followed: false });
+        }
+
+        // Not following → follow
+        const [result] = await db.query(
+            "INSERT INTO follow (follower_id, followed_id) VALUES (?, ?)",
+            [userId, followedId]
+        );
+
+        return res.json({ followed: true, insertId: result.insertId });
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ error: "Something went wrong" });
+    }
 };

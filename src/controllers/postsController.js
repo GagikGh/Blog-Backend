@@ -68,8 +68,6 @@ export const getPostById = async (req, res) => {
         tags
     };
 
-    console.log(post);
-
     res.json(post);
 };
 
@@ -119,6 +117,5 @@ export const getPostsByTag = async (req, res) => {
         posts: [...posts]
     }
 
-    console.log(postsByTag);
     res.json(postsByTag);
 };
